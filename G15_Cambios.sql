@@ -26,8 +26,8 @@ CHECK (tipo_prof = 0 or tipo_prof = 1);
     ADD CONSTRAINT fk_gr15_asignatura_profesor_asignatura
         FOREIGN KEY (cod_asig,tipo_asig)
         REFERENCES gr15_asignatura(cod_asig,tipo_asig)
-        ON UPDATE CASCADE
-        ON DELETE CASCADE;
+        ON UPDATE RESTRICT
+        ON DELETE RESTRICT;
 
     ALTER TABLE gr15_asignatura_profesor
     DROP CONSTRAINT fk_gr15_asignatura_profesor_profesor;
@@ -36,8 +36,8 @@ CHECK (tipo_prof = 0 or tipo_prof = 1);
     ADD CONSTRAINT fk_gr15_asignatura_profesor_profesor
         FOREIGN KEY (dni)
         REFERENCES gr15_profesor(dni)
-        ON UPDATE CASCADE
-        ON DELETE CASCADE;
+        ON UPDATE RESTRICT
+        ON DELETE RESTRICT;
 
     ALTER TABLE gr15_prof_simple
     DROP CONSTRAINT fk_gr15_prof_simple_profesor;
@@ -49,8 +49,8 @@ CHECK (tipo_prof = 0 or tipo_prof = 1);
         ON UPDATE CASCADE
         ON DELETE CASCADE;
 
-    ALTER TABLE gr15_prof_simple
-    DROP CONSTRAINT fk_gr15_prof_simple_profesor;
+    ALTER TABLE gr15_prof_exclusivo
+    DROP CONSTRAINT fk_gr15_prof_exclusivo_profesor;
 
     ALTER TABLE gr15_prof_exclusivo
     ADD CONSTRAINT fk_gr15_prof_exclusivo_profesor
@@ -63,7 +63,7 @@ CHECK (tipo_prof = 0 or tipo_prof = 1);
 -- Obtener cantidad de profesores
 create or replace function fn_gr15_getCantidadProfesor(tipo integer, tipo_a char, cod integer)
 returns bigint as  $$
-    declare cantidad bigint;
+    declare cantidad integer;
         begin
             if (tipo = 0) then
                 select cantidad_prof_simples into cantidad from gr15_asignatura a
@@ -93,7 +93,7 @@ $$ language 'plpgsql';
 -- insert
 create or replace function trfn_gr15_insActualizarCantidad()
 returns trigger as $$
-    declare cantidad bigint;
+    declare cantidad integer;
     declare rec record;
     declare tipo integer;
     begin
@@ -113,17 +113,11 @@ returns trigger as $$
     END
     $$ language 'plpgsql';
 
-
 create trigger tr_gr15_asignatura_profesor_insertActualizarCantidad
 after insert on gr15_asignatura_profesor
 REFERENCING NEW TABLE AS newTable
 for each statement
 execute procedure trfn_gr15_insActualizarCantidad();
-
---delete from gr15_asignatura_profesor where dni = 1;
---insert into gr15_asignatura_profesor values ( 1,'1',1,1,3,true);
---insert into gr15_profesor values ( 2,2,1,1,3,true);
---update gr15_asignatura set cantidad_prof_simples = 0 where cod_asig = 1 and tipo_asig = '1';
 
 -- update :
 create or replace function trfn_gr15_updActualizarCantidad()
@@ -131,7 +125,7 @@ returns trigger as $$
     declare ntable record;
     declare otable record;
     declare tipoProf integer;
-    declare cantidad bigint;
+    declare cantidad integer;
     begin
         select * INTO ntable
         from newTable;
@@ -149,9 +143,13 @@ returns trigger as $$
         END LOOP;
         FOR otable IN ( select * from oldTable) LOOP
             if ( otable.activo = true ) THEN
-                cantidad = fn_gr15_getCantidadProfesor( tipoProf, otable.tipo_asig, otable.cod_asig);
-                cantidad = cantidad - 1;
                 select tipo_prof into tipoProf from gr15_profesor where dni = otable.dni;
+                cantidad = fn_gr15_getCantidadProfesor( tipoProf, otable.tipo_asig, otable.cod_asig);
+                raise notice ' cantidad = %', cantidad;
+                if ( cantidad > 0 ) THEN
+                    cantidad = cantidad-1;
+                end if;
+                raise notice ' cantidad = %', cantidad;
                 if ( tipoProf = 0 ) THEN
                     PERFORM fn_gr15_actualizarCantidad( 0, cantidad,otable.tipo_asig,otable.cod_asig);
                 else
@@ -173,13 +171,15 @@ create or replace function trfn_gr15_delActualizarCantidad()
 returns trigger as $$
     declare otable record;
     declare tipoProf int;
-    declare cantidad bigint;
+    declare cantidad integer;
     begin
         for otable in ( select * from oldTable ) LOOP
             if ( otable.activo = true ) THEN
-                cantidad = fn_gr15_getCantidadProfesor( tipoProf, otable.tipo_asig, otable.cod_asig);
-                cantidad = cantidad - 1;
                 select tipo_prof into tipoProf from gr15_profesor where dni = otable.dni;
+                cantidad = fn_gr15_getCantidadProfesor( tipoProf, otable.tipo_asig, otable.cod_asig);
+                if ( cantidad > 0 ) THEN
+                    cantidad = cantidad-1;
+                end if;
                 if ( tipoProf = 0 ) THEN
                     PERFORM fn_gr15_actualizarCantidad( 0, cantidad,otable.tipo_asig,otable.cod_asig);
                 else
@@ -204,11 +204,15 @@ CREATE VIEW GR15_V_PROF_SIMPLE
 AS SELECT ps.dni,ps.perfil,p.apellido,p.nombre,p.titulo,p.departamento,p.tipo_prof
     FROM gr15_prof_simple ps JOIN gr15_profesor p ON ( ps.dni = p.dni);
 
+--Vista no actualizable en postGresql porque contiene 2 tablas en el from
+
 -- VISTA PROF_EXCLUSIVO
 
 CREATE VIEW GR15_V_PROF_EXCLUSIVO
 AS SELECT pe.dni,pe.proy_investig,p.apellido,p.nombre,p.titulo,p.departamento,p.tipo_prof
     FROM gr15_prof_exclusivo pe JOIN gr15_profesor p ON ( pe.dni = p.dni);
+
+--Vista no actualizable en postGresql porque contiene 2 tablas en el from
 
     --A2
 -- TRIGGERS
@@ -239,21 +243,7 @@ $$ language 'plpgsql';
 create trigger tr_gr15_v_prof_simple_controlProfSimple
 instead of insert or update or delete on GR15_V_PROF_SIMPLE
 for each row execute procedure trfn_gr15_controlProfesorSimple();
-/**
-insert into gr15_prof_simple values (1,'hhhhhh');
-select *
-from V_PROF_SIMPLE;
 
-select *
-from gr15_profesor;
-
-insert into V_PROF_SIMPLE values ( 2,'ffff','jere','jere','nose',8,0);
-update V_PROF_SIMPLE set dni = 5 where dni = 1;
-delete from V_PROF_SIMPLE where dni = 2;
-
-select *
-from V_PROF_EXCLUSIVO;
-**/
 create or replace function trfn_gr15_controlProfesorExclusivo()
 returns trigger as $$
     BEGIN
